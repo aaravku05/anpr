@@ -4,10 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ANPR Web App</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
     <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Poppins', sans-serif;
+        }
         body {
-            font-family: Arial, sans-serif;
-            background: #121212;
+            background: linear-gradient(135deg, #0f0f0f, #1a1a1a);
             color: white;
             display: flex;
             justify-content: center;
@@ -16,28 +22,53 @@
             flex-direction: column;
         }
         .container {
-            background: #1E1E1E;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0px 0px 10px rgba(255, 255, 255, 0.2);
-            width: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0px 0px 20px rgba(0, 255, 100, 0.3);
+            width: 350px;
             text-align: center;
+            transition: all 0.3s ease-in-out;
         }
-        input, button, select {
+        .container:hover {
+            transform: scale(1.03);
+            box-shadow: 0px 0px 30px rgba(0, 255, 100, 0.5);
+        }
+        h2 {
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        input, button {
             width: 100%;
-            padding: 10px;
-            margin: 10px 0;
+            padding: 12px;
+            margin: 12px 0;
             border: none;
-            border-radius: 5px;
-        }
-        button {
-            background: #00A86B;
-            color: white;
-            cursor: pointer;
+            border-radius: 6px;
             font-size: 16px;
         }
+        input {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            outline: none;
+        }
+        input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        button {
+            background: #00FF88;
+            color: black;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease-in-out;
+        }
         button:hover {
-            background: #007B50;
+            background: #00CC66;
+            transform: translateY(-2px);
+            box-shadow: 0px 5px 15px rgba(0, 255, 100, 0.4);
+        }
+        .hidden {
+            display: none;
         }
     </style>
 </head>
@@ -49,7 +80,7 @@
         <button onclick="login()">Login</button>
     </div>
 
-    <div class="container" id="admin-panel" style="display: none;">
+    <div class="container hidden" id="admin-panel">
         <h2>Admin Panel</h2>
         <input type="text" id="plate" placeholder="Plate Number">
         <button onclick="addPrimaryVehicle()">Add Primary Vehicle</button>
@@ -60,7 +91,7 @@
         <button onclick="createUser()">Create User</button>
     </div>
 
-    <div class="container" id="user-panel" style="display: none;">
+    <div class="container hidden" id="user-panel">
         <h2>User Panel</h2>
         <h3>Primary Vehicles</h3>
         <div id="primary-vehicles"></div>
@@ -78,15 +109,15 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ username, password })
             }).then(res => res.json()).then(data => {
+                document.getElementById("login-container").classList.add("hidden");
                 if (data.role === 'admin') {
-                    document.getElementById("login-container").style.display = "none";
-                    document.getElementById("admin-panel").style.display = "block";
+                    document.getElementById("admin-panel").classList.remove("hidden");
                 } else if (data.role === 'user') {
-                    document.getElementById("login-container").style.display = "none";
-                    document.getElementById("user-panel").style.display = "block";
+                    document.getElementById("user-panel").classList.remove("hidden");
                     loadUserVehicles();
                 } else {
                     alert("Invalid login");
+                    document.getElementById("login-container").classList.remove("hidden");
                 }
             });
         }
