@@ -1,191 +1,121 @@
 import cv2
 import pytesseract
+import pandas as pd
 import RPi.GPIO as GPIO
 import time
-import sqlite3
-from flask import Flask, request, jsonify, render_template, session
+from openpyxl import load_workbook
 from smbus2 import SMBus
-import serial
+from RPLCD.i2c import CharLCD
 
-# -------------------- GPIO SETUP --------------------
+# ==== GPIO SETUP (Boom Barrier & Sensors) ====
+RELAY_OPEN = 17   # GPIO pin for OPEN relay
+RELAY_CLOSE = 27  # GPIO pin for CLOSE relay
+BUZZER_PIN = 22   # Buzzer for unauthorized access
+TRIG = 23         # Ultrasonic sensor trigger
+ECHO = 24         # Ultrasonic sensor echo
+
 GPIO.setmode(GPIO.BCM)
+GPIO.setup([RELAY_OPEN, RELAY_CLOSE, BUZZER_PIN, TRIG], GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
 
-# Boom Barrier Relays
-RELAY_OPEN = 17  # Opens barrier
-RELAY_CLOSE = 27  # Closes barrier
+# Default States
+GPIO.output(RELAY_OPEN, GPIO.LOW)
+GPIO.output(RELAY_CLOSE, GPIO.LOW)
+GPIO.output(BUZZER_PIN, GPIO.LOW)
 
-# Buzzer (Unauthorized Alert)
-BUZZER = 22
+# ==== I2C LCD SETUP ====
+lcd = CharLCD(i2c_expander="PCF8574", address=0x27, port=1, cols=16, rows=2, dotsize=8)
 
-# Push Buttons (Manual Override)
-BUTTON_OPEN = 5
-BUTTON_CLOSE = 6
+def lcd_display(message):
+    lcd.clear()
+    lcd.write_string(message)
+    time.sleep(2)
 
-GPIO.setup([RELAY_OPEN, RELAY_CLOSE, BUZZER, BUTTON_OPEN, BUTTON_CLOSE], GPIO.OUT)
-GPIO.output([RELAY_OPEN, RELAY_CLOSE], GPIO.LOW)
+# ==== EXCEL FILE FOR AUTHORIZED VEHICLES ====
+EXCEL_FILE = "authorized_vehicles.xlsx"
 
-# -------------------- LCD SETUP --------------------
-I2C_ADDR = 0x27
-bus = SMBus(1)
+def load_authorized_plates():
+    df = pd.read_excel(EXCEL_FILE)
+    return df.iloc[:, 0].astype(str).str.upper().tolist()
 
-def lcd_display(text):
-    bus.write_byte_data(I2C_ADDR, 0x00, ord(text))
-
-# -------------------- DATABASE SETUP --------------------
-conn = sqlite3.connect('anpr.db', check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    role TEXT NOT NULL
-)
-''')
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS vehicles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL,
-    plate TEXT UNIQUE NOT NULL
-)
-''')
-
-conn.commit()
-
-# -------------------- FLASK SERVER --------------------
-app = Flask(__name__)
-app.secret_key = "secret_key"
-
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    username, password = data["username"], data["password"]
-    cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
-    result = cursor.fetchone()
-
-    if result:
-        session["username"] = username
-        session["role"] = result[0]
-        return jsonify({"role": result[0]})
-    return jsonify({"error": "Invalid login"}), 401
-
-@app.route('/admin')
-def admin_dashboard():
-    if session.get('role') == 'admin':
-        return render_template('admin.html')
-    return "Access Denied", 403
-
-@app.route('/create_user', methods=['POST'])
-def create_user():
-    data = request.json
-    username, password = data["username"], data["password"]
-
-    try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')", (username, password))
-        conn.commit()
-        return jsonify({"message": "User created successfully"})
-    except sqlite3.IntegrityError:
-        return jsonify({"message": "User already exists"}), 400
-
-@app.route('/link_vehicle', methods=['POST'])
-def link_vehicle():
-    data = request.json
-    username, plate = data["username"], data["plate"]
-
-    cursor.execute("SELECT * FROM users WHERE username=?", (username,))
-    if not cursor.fetchone():
-        return jsonify({"message": "User does not exist"}), 400
-
-    try:
-        cursor.execute("INSERT INTO vehicles (username, plate) VALUES (?, ?)", (username, plate))
-        conn.commit()
-        return jsonify({"message": f"Vehicle {plate} linked to {username}"})
-    except sqlite3.IntegrityError:
-        return jsonify({"message": "Vehicle already exists"}), 400
-
-# -------------------- ANPR SYSTEM --------------------
-def process_anpr():
+# ==== IMAGE CAPTURE & OCR ====
+def capture_plate():
     cap = cv2.VideoCapture(0)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            continue
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret:
+        print("Error: Could not capture image")
+        return None
 
-        # Convert frame to grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        plate_number = pytesseract.image_to_string(gray, config='--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
 
-        plate_number = plate_number.strip()
-        if plate_number:
-            print(f"Detected Plate: {plate_number}")
-            check_vehicle(plate_number)
+    plate_text = pytesseract.image_to_string(thresh, config='--psm 8')
+    plate_text = ''.join(filter(str.isalnum, plate_text)).upper()
 
-        time.sleep(1)
+    return plate_text
 
-# -------------------- VEHICLE AUTHENTICATION --------------------
-def check_vehicle(plate):
-    cursor.execute("SELECT username FROM vehicles WHERE plate=?", (plate,))
-    result = cursor.fetchone()
+# ==== VEHICLE PASS DETECTION (Ultrasonic Sensor) ====
+def vehicle_passed():
+    GPIO.output(TRIG, True)
+    time.sleep(0.00001)
+    GPIO.output(TRIG, False)
 
-    if result:
-        print(f"Access Granted: {plate}")
-        lcd_display(f"Access Granted: {plate}")
-        open_barrier()
-    else:
-        print(f"Access Denied: {plate}")
-        lcd_display("Access Denied")
-        GPIO.output(BUZZER, GPIO.HIGH)
-        time.sleep(1)
-        GPIO.output(BUZZER, GPIO.LOW)
+    start_time, end_time = 0, 0
+    while GPIO.input(ECHO) == 0:
+        start_time = time.time()
+    while GPIO.input(ECHO) == 1:
+        end_time = time.time()
 
-# -------------------- BOOM BARRIER CONTROL --------------------
+    distance = (end_time - start_time) * 17150
+    return distance > 50  # Vehicle has fully passed if >50cm away
+
+# ==== BOOM BARRIER CONTROL ====
 def open_barrier():
+    print("Opening Barrier...")
     GPIO.output(RELAY_OPEN, GPIO.HIGH)
-    time.sleep(3)
+    time.sleep(0.5)  # Pulse to trigger relay
     GPIO.output(RELAY_OPEN, GPIO.LOW)
 
 def close_barrier():
+    print("Closing Barrier...")
     GPIO.output(RELAY_CLOSE, GPIO.HIGH)
-    time.sleep(3)
+    time.sleep(0.5)  # Pulse to trigger relay
     GPIO.output(RELAY_CLOSE, GPIO.LOW)
 
-# -------------------- EXIT GATE (Ultrasonic Sensor) --------------------
-def exit_gate():
-    ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)
-    
+# ==== MAIN SYSTEM LOOP ====
+try:
     while True:
-        distance = float(ser.readline().decode().strip())
-        if distance < 15:
-            print("Vehicle exiting...")
-            lcd_display("Exit Detected")
-            time.sleep(2)
-            close_barrier()
+        print("Waiting for vehicle...")
+        lcd_display("Scanning...")
+        authorized_plates = load_authorized_plates()
+        plate_number = capture_plate()
 
-# -------------------- MANUAL OVERRIDE --------------------
-def manual_override():
-    while True:
-        if GPIO.input(BUTTON_OPEN) == GPIO.HIGH:
-            open_barrier()
-        if GPIO.input(BUTTON_CLOSE) == GPIO.HIGH:
-            close_barrier()
-        time.sleep(0.5)
+        if plate_number:
+            print(f"Detected Plate: {plate_number}")
 
-# -------------------- START SYSTEM --------------------
-if __name__ == '__main__':
-    import threading
+            if plate_number in authorized_plates:
+                print("Access Granted!")
+                lcd_display("Access Granted!")
+                open_barrier()
 
-    anpr_thread = threading.Thread(target=process_anpr)
-    exit_thread = threading.Thread(target=exit_gate)
-    manual_thread = threading.Thread(target=manual_override)
+                # Wait for vehicle to pass before closing
+                print("Waiting for vehicle to fully pass...")
+                while not vehicle_passed():
+                    time.sleep(0.5)
 
-    anpr_thread.start()
-    exit_thread.start()
-    manual_thread.start()
+                close_barrier()
+                lcd_display("Gate Closed!")
+            else:
+                print("Access Denied!")
+                lcd_display("Access Denied!")
+                GPIO.output(BUZZER_PIN, GPIO.HIGH)  # Buzzer alert
+                time.sleep(2)
+                GPIO.output(BUZZER_PIN, GPIO.LOW)
 
-    app.run(debug=True, host='0.0.0.0')
+        time.sleep(3)  # Small delay before next scan
+
+except KeyboardInterrupt:
+    print("Shutting down...")
+    GPIO.cleanup()
