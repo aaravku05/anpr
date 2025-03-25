@@ -1,164 +1,157 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ANPR Web App</title>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Poppins', sans-serif;
-        }
-        body {
-            background: linear-gradient(135deg, #0f0f0f, #1a1a1a);
-            color: white;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            flex-direction: column;
-        }
-        .container {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 25px;
-            border-radius: 12px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0px 0px 20px rgba(0, 255, 100, 0.3);
-            width: 350px;
-            text-align: center;
-            transition: all 0.3s ease-in-out;
-        }
-        .container:hover {
-            transform: scale(1.03);
-            box-shadow: 0px 0px 30px rgba(0, 255, 100, 0.5);
-        }
-        h2 {
-            font-weight: 600;
-            margin-bottom: 15px;
-        }
-        input, button {
-            width: 100%;
-            padding: 12px;
-            margin: 12px 0;
-            border: none;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-        input {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            outline: none;
-        }
-        input::placeholder {
-            color: rgba(255, 255, 255, 0.6);
-        }
-        button {
-            background: #00FF88;
-            color: black;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease-in-out;
-        }
-        button:hover {
-            background: #00CC66;
-            transform: translateY(-2px);
-            box-shadow: 0px 5px 15px rgba(0, 255, 100, 0.4);
-        }
-        .hidden {
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="container" id="login-container">
-        <h2>Login</h2>
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
-    </div>
 
-    <div class="container hidden" id="admin-panel">
-        <h2>Admin Panel</h2>
-        <input type="text" id="plate" placeholder="Plate Number">
-        <button onclick="addPrimaryVehicle()">Add Primary Vehicle</button>
-        <button onclick="removeVehicle()">Remove Vehicle</button>
-        <h3>Users</h3>
-        <input type="text" id="newUser" placeholder="New Username">
-        <input type="password" id="newPassword" placeholder="New Password">
-        <button onclick="createUser()">Create User</button>
-    </div>
 
-    <div class="container hidden" id="user-panel">
-        <h2>User Panel</h2>
-        <h3>Primary Vehicles</h3>
-        <div id="primary-vehicles"></div>
-        <h3>Add Temporary Vehicle</h3>
-        <input type="text" id="tempPlate" placeholder="Plate Number">
-        <button onclick="addTemporaryVehicle()">Add Temporary Vehicle</button>
-    </div>
+🚗 ANPR-Based Boom Barrier System (Raspberry Pi)
 
-    <script>
-        function login() {
-            const username = document.getElementById("username").value;
-            const password = document.getElementById("password").value;
-            fetch('/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ username, password })
-            }).then(res => res.json()).then(data => {
-                document.getElementById("login-container").classList.add("hidden");
-                if (data.role === 'admin') {
-                    document.getElementById("admin-panel").classList.remove("hidden");
-                } else if (data.role === 'user') {
-                    document.getElementById("user-panel").classList.remove("hidden");
-                    loadUserVehicles();
-                } else {
-                    alert("Invalid login");
-                    document.getElementById("login-container").classList.remove("hidden");
-                }
-            });
-        }
-        function addPrimaryVehicle() {
-            fetch('/add_primary_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("plate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function removeVehicle() {
-            fetch('/remove_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("plate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function createUser() {
-            fetch('/create_user', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    username: document.getElementById("newUser").value,
-                    password: document.getElementById("newPassword").value
-                })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function addTemporaryVehicle() {
-            fetch('/add_temp_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("tempPlate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function loadUserVehicles() {
-            fetch('/user_vehicles')
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById("primary-vehicles").innerHTML = data.vehicles.join("<br>");
-            });
-        }
-    </script>
-</body>
-</html>
+This is a fully offline Automatic Number Plate Recognition (ANPR) system that controls an entry boom barrier using Raspberry Pi, OpenCV, Tesseract OCR, and two ultrasonic sensors.
+
+🚀 It works 100% offline and manages authorized vehicles using an Excel file (authorized_vehicles.xlsx).
+
+
+---
+
+📌 Features
+
+✅ ANPR (Camera + OCR) recognizes license plates
+✅ Barrier opens only for authorized vehicles (stored in an Excel file)
+✅ Two ultrasonic sensors:
+
+Before the gate → Detects incoming vehicle (Triggers ANPR)
+
+After the gate → Ensures vehicle has fully passed before closing
+✅ I2C LCD for real-time status updates
+✅ Buzzer alert for unauthorized vehicles
+✅ Uses relays to control Hikvision TMG300 barrier gate
+✅ No internet or external database required (Standalone system)
+
+
+
+---
+
+🛠 Hardware Requirements
+
+Raspberry Pi 3B+ or later
+
+USB Camera (for ANPR)
+
+Relay Module (for barrier control)
+
+I2C LCD Display (16x2) (for status updates)
+
+Buzzer (for unauthorized access alert)
+
+2x Ultrasonic Sensors (HC-SR04)
+
+Before gate (to detect an incoming vehicle)
+
+After gate (to confirm vehicle has fully passed)
+
+
+
+
+---
+
+📥 Installation
+
+1️⃣ Install Dependencies
+
+Run the following command on Raspberry Pi:
+
+pip install opencv-python pytesseract pandas openpyxl RPi.GPIO smbus2 RPLCD
+
+2️⃣ Prepare the Excel File
+
+Create an Excel file named authorized_vehicles.xlsx with only one column (A) containing plate numbers (uppercase, no spaces).
+
+Example: | Plate Number | |-------------| | MH12AB1234  | | GJ05XY6789  | | DL01ZZ4321  |
+
+
+---
+
+📌 How It Works
+
+1. Ultrasonic Sensor 1 (Before Gate) detects an incoming vehicle → ANPR is triggered.
+
+
+2. Camera captures an image and OCR extracts the license plate number.
+
+
+3. The extracted plate is checked against the Excel file (authorized_vehicles.xlsx).
+
+
+4. If authorized:
+
+✅ Barrier opens (Relay pulse).
+
+✅ LCD displays "Access Granted".
+
+✅ Barrier remains open until vehicle fully passes the second ultrasonic sensor (After Gate).
+
+✅ Barrier closes only after vehicle is clear.
+
+
+
+5. If unauthorized:
+
+❌ Barrier remains closed.
+
+❌ LCD displays "Access Denied".
+
+❌ Buzzer sounds for 2 seconds.
+
+
+
+6. System resets and waits for the next vehicle.
+
+
+
+
+---
+
+📜 Running the System
+
+Run the following command on Raspberry Pi:
+
+python3 anpr_gate.py
+
+The system will now operate automatically! 🎯
+
+
+---
+
+🛠 Wiring Setup
+
+
+---
+
+🛠 System Customization
+
+🔹 Modify Ultrasonic Sensor Distance Thresholds (Default: 50 cm before, 80 cm after)
+
+vehicle_detected(TRIG_1, ECHO_1, 50)  # Before gate
+vehicle_detected(TRIG_2, ECHO_2, 80)  # After gate
+
+🔹 Edit authorized_vehicles.xlsx to add/remove vehicles.
+
+
+---
+
+📌 Future Enhancements
+
+📌 Improve OCR Accuracy → Use deep learning-based ANPR models.
+📌 Add Web Interface → For remote management of vehicles.
+📌 Implement Logging → Store entry logs in a database.
+
+
+---
+
+📌 License
+ Open source, use freely! 🎉
+
+
+---
+
+📞 Support
+
+For any issues, feel free to create a GitHub Issue or contact me! 🚀
+
+
