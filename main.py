@@ -7,16 +7,20 @@ from openpyxl import load_workbook
 from smbus2 import SMBus
 from RPLCD.i2c import CharLCD
 
-# ==== GPIO SETUP (Boom Barrier & Sensors) ====
+# ==== GPIO SETUP ====
 RELAY_OPEN = 17   # GPIO pin for OPEN relay
 RELAY_CLOSE = 27  # GPIO pin for CLOSE relay
 BUZZER_PIN = 22   # Buzzer for unauthorized access
-TRIG = 23         # Ultrasonic sensor trigger
-ECHO = 24         # Ultrasonic sensor echo
+
+TRIG_1 = 23  # Ultrasonic sensor 1 (Before Gate) - Detects incoming vehicle
+ECHO_1 = 24
+
+TRIG_2 = 5  # Ultrasonic sensor 2 (After Gate) - Ensures vehicle has fully passed
+ECHO_2 = 6
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup([RELAY_OPEN, RELAY_CLOSE, BUZZER_PIN, TRIG], GPIO.OUT)
-GPIO.setup(ECHO, GPIO.IN)
+GPIO.setup([RELAY_OPEN, RELAY_CLOSE, BUZZER_PIN, TRIG_1, TRIG_2], GPIO.OUT)
+GPIO.setup([ECHO_1, ECHO_2], GPIO.IN)
 
 # Default States
 GPIO.output(RELAY_OPEN, GPIO.LOW)
@@ -56,20 +60,21 @@ def capture_plate():
 
     return plate_text
 
-# ==== VEHICLE PASS DETECTION (Ultrasonic Sensor) ====
-def vehicle_passed():
-    GPIO.output(TRIG, True)
+# ==== ULTRASONIC SENSOR FUNCTIONS ====
+def vehicle_detected(sensor_trig, sensor_echo, distance_threshold):
+    """ Returns True if a vehicle is detected within the given distance threshold """
+    GPIO.output(sensor_trig, True)
     time.sleep(0.00001)
-    GPIO.output(TRIG, False)
+    GPIO.output(sensor_trig, False)
 
     start_time, end_time = 0, 0
-    while GPIO.input(ECHO) == 0:
+    while GPIO.input(sensor_echo) == 0:
         start_time = time.time()
-    while GPIO.input(ECHO) == 1:
+    while GPIO.input(sensor_echo) == 1:
         end_time = time.time()
 
     distance = (end_time - start_time) * 17150
-    return distance > 50  # Vehicle has fully passed if >50cm away
+    return distance < distance_threshold
 
 # ==== BOOM BARRIER CONTROL ====
 def open_barrier():
@@ -88,7 +93,15 @@ def close_barrier():
 try:
     while True:
         print("Waiting for vehicle...")
-        lcd_display("Scanning...")
+        lcd_display("Waiting for Car...")
+
+        # 🔹 WAIT UNTIL VEHICLE ARRIVES (BEFORE THE GATE)
+        while not vehicle_detected(TRIG_1, ECHO_1, 50):  # Detects vehicle within 50 cm before gate
+            time.sleep(0.5)
+
+        print("Vehicle Detected! Running ANPR...")
+        lcd_display("Scanning Plate...")
+
         authorized_plates = load_authorized_plates()
         plate_number = capture_plate()
 
@@ -100,9 +113,9 @@ try:
                 lcd_display("Access Granted!")
                 open_barrier()
 
-                # Wait for vehicle to pass before closing
+                # 🔹 WAIT FOR VEHICLE TO FULLY PASS AFTER THE GATE
                 print("Waiting for vehicle to fully pass...")
-                while not vehicle_passed():
+                while not vehicle_detected(TRIG_2, ECHO_2, 80):  # Ensures vehicle has fully passed beyond 80 cm
                     time.sleep(0.5)
 
                 close_barrier()
