@@ -1,133 +1,191 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ANPR Web App</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #121212;
-            color: white;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            flex-direction: column;
-        }
-        .container {
-            background: #1E1E1E;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0px 0px 10px rgba(255, 255, 255, 0.2);
-            width: 300px;
-            text-align: center;
-        }
-        input, button, select {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border: none;
-            border-radius: 5px;
-        }
-        button {
-            background: #00A86B;
-            color: white;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover {
-            background: #007B50;
-        }
-    </style>
-</head>
-<body>
-    <div class="container" id="login-container">
-        <h2>Login</h2>
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
-    </div>
+import cv2
+import pytesseract
+import RPi.GPIO as GPIO
+import time
+import sqlite3
+from flask import Flask, request, jsonify, render_template, session
+from smbus2 import SMBus
+import serial
 
-    <div class="container" id="admin-panel" style="display: none;">
-        <h2>Admin Panel</h2>
-        <input type="text" id="plate" placeholder="Plate Number">
-        <button onclick="addPrimaryVehicle()">Add Primary Vehicle</button>
-        <button onclick="removeVehicle()">Remove Vehicle</button>
-        <h3>Users</h3>
-        <input type="text" id="newUser" placeholder="New Username">
-        <input type="password" id="newPassword" placeholder="New Password">
-        <button onclick="createUser()">Create User</button>
-    </div>
+# -------------------- GPIO SETUP --------------------
+GPIO.setmode(GPIO.BCM)
 
-    <div class="container" id="user-panel" style="display: none;">
-        <h2>User Panel</h2>
-        <h3>Primary Vehicles</h3>
-        <div id="primary-vehicles"></div>
-        <h3>Add Temporary Vehicle</h3>
-        <input type="text" id="tempPlate" placeholder="Plate Number">
-        <button onclick="addTemporaryVehicle()">Add Temporary Vehicle</button>
-    </div>
+# Boom Barrier Relays
+RELAY_OPEN = 17  # Opens barrier
+RELAY_CLOSE = 27  # Closes barrier
 
-    <script>
-        function login() {
-            const username = document.getElementById("username").value;
-            const password = document.getElementById("password").value;
-            fetch('/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ username, password })
-            }).then(res => res.json()).then(data => {
-                if (data.role === 'admin') {
-                    document.getElementById("login-container").style.display = "none";
-                    document.getElementById("admin-panel").style.display = "block";
-                } else if (data.role === 'user') {
-                    document.getElementById("login-container").style.display = "none";
-                    document.getElementById("user-panel").style.display = "block";
-                    loadUserVehicles();
-                } else {
-                    alert("Invalid login");
-                }
-            });
-        }
-        function addPrimaryVehicle() {
-            fetch('/add_primary_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("plate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function removeVehicle() {
-            fetch('/remove_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("plate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function createUser() {
-            fetch('/create_user', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    username: document.getElementById("newUser").value,
-                    password: document.getElementById("newPassword").value
-                })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function addTemporaryVehicle() {
-            fetch('/add_temp_vehicle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ plate: document.getElementById("tempPlate").value })
-            }).then(res => res.json()).then(data => alert(data.message));
-        }
-        function loadUserVehicles() {
-            fetch('/user_vehicles')
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById("primary-vehicles").innerHTML = data.vehicles.join("<br>");
-            });
-        }
-    </script>
-</body>
-</html>
+# Buzzer (Unauthorized Alert)
+BUZZER = 22
+
+# Push Buttons (Manual Override)
+BUTTON_OPEN = 5
+BUTTON_CLOSE = 6
+
+GPIO.setup([RELAY_OPEN, RELAY_CLOSE, BUZZER, BUTTON_OPEN, BUTTON_CLOSE], GPIO.OUT)
+GPIO.output([RELAY_OPEN, RELAY_CLOSE], GPIO.LOW)
+
+# -------------------- LCD SETUP --------------------
+I2C_ADDR = 0x27
+bus = SMBus(1)
+
+def lcd_display(text):
+    bus.write_byte_data(I2C_ADDR, 0x00, ord(text))
+
+# -------------------- DATABASE SETUP --------------------
+conn = sqlite3.connect('anpr.db', check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    role TEXT NOT NULL
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS vehicles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    plate TEXT UNIQUE NOT NULL
+)
+''')
+
+conn.commit()
+
+# -------------------- FLASK SERVER --------------------
+app = Flask(__name__)
+app.secret_key = "secret_key"
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username, password = data["username"], data["password"]
+    cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
+    result = cursor.fetchone()
+
+    if result:
+        session["username"] = username
+        session["role"] = result[0]
+        return jsonify({"role": result[0]})
+    return jsonify({"error": "Invalid login"}), 401
+
+@app.route('/admin')
+def admin_dashboard():
+    if session.get('role') == 'admin':
+        return render_template('admin.html')
+    return "Access Denied", 403
+
+@app.route('/create_user', methods=['POST'])
+def create_user():
+    data = request.json
+    username, password = data["username"], data["password"]
+
+    try:
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')", (username, password))
+        conn.commit()
+        return jsonify({"message": "User created successfully"})
+    except sqlite3.IntegrityError:
+        return jsonify({"message": "User already exists"}), 400
+
+@app.route('/link_vehicle', methods=['POST'])
+def link_vehicle():
+    data = request.json
+    username, plate = data["username"], data["plate"]
+
+    cursor.execute("SELECT * FROM users WHERE username=?", (username,))
+    if not cursor.fetchone():
+        return jsonify({"message": "User does not exist"}), 400
+
+    try:
+        cursor.execute("INSERT INTO vehicles (username, plate) VALUES (?, ?)", (username, plate))
+        conn.commit()
+        return jsonify({"message": f"Vehicle {plate} linked to {username}"})
+    except sqlite3.IntegrityError:
+        return jsonify({"message": "Vehicle already exists"}), 400
+
+# -------------------- ANPR SYSTEM --------------------
+def process_anpr():
+    cap = cv2.VideoCapture(0)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        # Convert frame to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        plate_number = pytesseract.image_to_string(gray, config='--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+
+        plate_number = plate_number.strip()
+        if plate_number:
+            print(f"Detected Plate: {plate_number}")
+            check_vehicle(plate_number)
+
+        time.sleep(1)
+
+# -------------------- VEHICLE AUTHENTICATION --------------------
+def check_vehicle(plate):
+    cursor.execute("SELECT username FROM vehicles WHERE plate=?", (plate,))
+    result = cursor.fetchone()
+
+    if result:
+        print(f"Access Granted: {plate}")
+        lcd_display(f"Access Granted: {plate}")
+        open_barrier()
+    else:
+        print(f"Access Denied: {plate}")
+        lcd_display("Access Denied")
+        GPIO.output(BUZZER, GPIO.HIGH)
+        time.sleep(1)
+        GPIO.output(BUZZER, GPIO.LOW)
+
+# -------------------- BOOM BARRIER CONTROL --------------------
+def open_barrier():
+    GPIO.output(RELAY_OPEN, GPIO.HIGH)
+    time.sleep(3)
+    GPIO.output(RELAY_OPEN, GPIO.LOW)
+
+def close_barrier():
+    GPIO.output(RELAY_CLOSE, GPIO.HIGH)
+    time.sleep(3)
+    GPIO.output(RELAY_CLOSE, GPIO.LOW)
+
+# -------------------- EXIT GATE (Ultrasonic Sensor) --------------------
+def exit_gate():
+    ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)
+    
+    while True:
+        distance = float(ser.readline().decode().strip())
+        if distance < 15:
+            print("Vehicle exiting...")
+            lcd_display("Exit Detected")
+            time.sleep(2)
+            close_barrier()
+
+# -------------------- MANUAL OVERRIDE --------------------
+def manual_override():
+    while True:
+        if GPIO.input(BUTTON_OPEN) == GPIO.HIGH:
+            open_barrier()
+        if GPIO.input(BUTTON_CLOSE) == GPIO.HIGH:
+            close_barrier()
+        time.sleep(0.5)
+
+# -------------------- START SYSTEM --------------------
+if __name__ == '__main__':
+    import threading
+
+    anpr_thread = threading.Thread(target=process_anpr)
+    exit_thread = threading.Thread(target=exit_gate)
+    manual_thread = threading.Thread(target=manual_override)
+
+    anpr_thread.start()
+    exit_thread.start()
+    manual_thread.start()
+
+    app.run(debug=True, host='0.0.0.0')
