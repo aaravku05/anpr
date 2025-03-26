@@ -1,5 +1,6 @@
 import cv2
-import openalpr
+import subprocess
+import json
 import pandas as pd
 import RPi.GPIO as GPIO
 import time
@@ -30,6 +31,7 @@ GPIO.output(BUZZER_PIN, GPIO.LOW)
 lcd = CharLCD(i2c_expander="PCF8574", address=0x27, port=1, cols=16, rows=2, dotsize=8)
 
 def lcd_display(message):
+    """ Display a message on the LCD """
     lcd.clear()
     lcd.write_string(message)
     time.sleep(2)
@@ -39,6 +41,7 @@ EXCEL_FILE = "authorized_vehicles.xlsx"
 authorized_plates = []
 
 def load_authorized_plates():
+    """ Load vehicle plate numbers from an Excel file """
     global authorized_plates
     try:
         df = pd.read_excel(EXCEL_FILE)
@@ -50,30 +53,30 @@ load_authorized_plates()
 
 # ==== IMAGE CAPTURE & OPENALPR ANPR ====
 def capture_plate():
-    cap = cv2.VideoCapture(0)
+    """ Capture an image, process it using OpenALPR, and return the detected plate number """
+    cap = cv2.VideoCapture(0)  # Use first webcam
     try:
         ret, frame = cap.read()
         if not ret:
             print("Error: Could not capture image")
             return None
 
-        # Save frame temporarily
         image_path = "/tmp/car_plate.jpg"
         cv2.imwrite(image_path, frame)
 
-        # Use OpenALPR to recognize the plate
-        alpr = openalpr.Alpr("us", "/etc/openalpr/openalpr.conf", "/usr/share/openalpr/runtime_data")
-        if not alpr.is_loaded():
-            print("Error loading OpenALPR")
-            return None
+        # Run OpenALPR via subprocess
+        command = f"alpr -c us -j {image_path}"  # Change 'us' to your country code
+        result = subprocess.run(command.split(), capture_output=True, text=True)
 
-        results = alpr.recognize_file(image_path)
-        alpr.unload()
-
-        if results['plates']:
-            plate_text = results['plates'][0]['characters'].upper()
-            return plate_text
-        else:
+        try:
+            data = json.loads(result.stdout)
+            if data['results']:
+                plate_number = data['results'][0]['plate']
+                return plate_number.upper()
+            else:
+                return None
+        except json.JSONDecodeError:
+            print("Error parsing OpenALPR output")
             return None
     except Exception as e:
         print(f"Error capturing plate: {e}")
@@ -103,12 +106,14 @@ def vehicle_detected(sensor_trig, sensor_echo, distance_threshold):
 
 # ==== BOOM BARRIER CONTROL ====
 def open_barrier():
+    """ Opens the boom barrier """
     print("Opening Barrier...")
     GPIO.output(RELAY_OPEN, GPIO.HIGH)
     time.sleep(0.5)
     GPIO.output(RELAY_OPEN, GPIO.LOW)
 
 def close_barrier():
+    """ Closes the boom barrier """
     print("Closing Barrier...")
     GPIO.output(RELAY_CLOSE, GPIO.HIGH)
     time.sleep(0.5)
@@ -136,8 +141,8 @@ try:
                 lcd_display("Access Granted!")
                 open_barrier()
 
-                print("Waiting for vehicle to fully pass...")
-                while vehicle_detected(TRIG_2, ECHO_2, 80):
+                print("Waiting for vehicle to pass fully...")
+                while vehicle_detected(TRIG_2, ECHO_2, 80):  # Ensure vehicle has left
                     time.sleep(0.5)
 
                 close_barrier()
@@ -148,6 +153,9 @@ try:
                 GPIO.output(BUZZER_PIN, GPIO.HIGH)
                 time.sleep(2)
                 GPIO.output(BUZZER_PIN, GPIO.LOW)
+        else:
+            print("No Plate Detected!")
+            lcd_display("No Plate Found!")
 
         time.sleep(3)
 
